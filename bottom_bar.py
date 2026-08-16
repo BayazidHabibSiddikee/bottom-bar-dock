@@ -106,7 +106,7 @@ _THEME_COLORS = {
     "green":   ("#00FF88", "#88FF00"),
     "purple":  ("#c678dd", "#7c3aed"),
     "red":     ("#e06c75", "#ff4444"),
-    "rainbow": ("#ff0000", "#0000ff"),
+    "rainbow": ("#FFC832", "#FF9500"),
     "sunset":  ("#ff6b35", "#ff006e"),
 }
 

@@ -42,7 +42,7 @@ uses): `~/.config/animated-wallpaper/glava.theme`.
 | `green`  | `#00FF88` | `#00FF88 → #88FF00` |
 | `purple` | `#C678DD` | `#c678dd → #7c3aed` |
 | `red`    | `#E06C75` | `#e06c75 → #ff4444` |
-| `rainbow` | warm gold `#FFC832` | `#ff0000 → #0000ff` |
+| `rainbow` | warm gold `#FFC832` | `#FFC832 → #FF9500` |
 | `sunset` | `#FF6B35` | `#ff6b35 → #ff006e` |
 
 Change it by editing one line, then toggle GLAVA to restart with the new colors:
