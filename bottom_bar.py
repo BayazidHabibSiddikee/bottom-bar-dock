@@ -2,9 +2,9 @@
 
 Left:  clickable workspace buttons + window switcher
 Mid:   time · CPU · RAM · disk · net speed
-Right: wifi SSID+IP · volume · battery · uptime · [GLAVA] · [COLOR]
+Right: wifi SSID+IP · volume · battery · uptime · [RESTART] · [NIGHT] · [GLAVA] · [COLOR]
 """
-import os, json, getpass, shutil, subprocess
+import os, sys, json, getpass, shutil, subprocess
 from datetime import datetime
 
 USER_TAG = f"[{getpass.getuser().upper()}]"
@@ -24,7 +24,23 @@ WS_BG = QColor(62, 68, 81, 255)
 
 GLAVA_PID        = os.path.expanduser("~/.config/animated-wallpaper/glava.pid")
 GLAVA_THEME_FILE = os.path.expanduser("~/.config/animated-wallpaper/glava.theme")
+GLAVA_MODE_FILE  = os.path.expanduser("~/.config/animated-wallpaper/glava.mode")
 GLAVA_THEMES     = ["cyan", "green", "purple", "red", "rainbow", "sunset"]
+GLAVA_MODULES    = ["wave", "graph", "bars"]
+GLAVA_ICONS      = {"wave": "🌊", "graph": "📈", "bars": "📊"}
+
+# redshift reading-mode levels: off → 5000K → 5500K → 6000K → reset
+NIGHT_TEMPS  = ["5000K", "5500K", "6000K"]
+NIGHT_STATE  = os.path.expanduser("~/.config/animated-wallpaper/night.temp")
+_NIGHT_COLORS = {
+    0: QColor(90, 90, 90),          # off
+    1: QColor(255, 246, 235),       # 5000K faint warm
+    2: QColor(255, 249, 242),       # 5500K faint warm
+    3: QColor(255, 252, 248),       # 6000K barely warm
+}
+
+WALL_DIR = os.path.expanduser("~/Videos")
+_WALL_EXTS = (".mp4", ".webm", ".mkv", ".mov")
 
 # Accent color shown in the bar for the active glava theme
 _THEME_ACCENTS = {
@@ -57,6 +73,48 @@ def _bar_accent():
     except Exception:
         theme = "cyan"
     return _THEME_ACCENTS.get(theme, CYAN)
+
+
+def _night_level():
+    """Return saved reading-mode level (0=off, 1=5000K, 2=5500K, 3=6000K).
+
+    State is tracked in a file (like the glava pid file); `redshift -p`
+    cannot be used because it reports the daemon config, not the applied
+    one-shot `-O` gamma.
+    """
+    try:
+        return max(0, min(3, int(open(NIGHT_STATE).read().strip())))
+    except Exception:
+        return 0
+
+def _write_night_level(level):
+    try:
+        os.makedirs(os.path.dirname(NIGHT_STATE), exist_ok=True)
+        with open(NIGHT_STATE, "w") as f:
+            f.write(str(level))
+    except Exception:
+        pass
+
+def _wall_videos():
+    """Sorted list of video filenames in ~/Videos (wallpaper candidates)."""
+    try:
+        return sorted(f for f in os.listdir(WALL_DIR)
+                      if f.lower().endswith(_WALL_EXTS))
+    except Exception:
+        return []
+
+def _wall_current():
+    """Path of the currently-running wallpaper video, or None."""
+    try:
+        out = subprocess.check_output(["pgrep", "-af", "mpv"], timeout=2,
+                                      text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            for part in line.split():
+                if part.startswith("/") and part.lower().endswith(_WALL_EXTS):
+                    return part
+    except Exception:
+        pass
+    return None
 
 
 def _cpu():
@@ -158,7 +216,7 @@ def _network():
                 timeout=1, text=True).splitlines():
             ip = line.split()[3].split("/")[0]; break
     except Exception: pass
-    return f"{icon} {name}  {ip}"
+    return f"{icon} {name} {ip}  "
 
 def _battery():
     try:
@@ -266,7 +324,7 @@ def _start_glava():
     _apply_theme_full(_read_theme())
     sw, sh = _screen_size()
     gy = max(0, sh - DOCK_H - GLAVA_H)
-    args = ["glava", "-m", "graph",
+    args = ["glava", "-m", _glava_mode(),
             "-r", f"setgeometry 0 {gy} {sw} {GLAVA_H}"]
     if shutil.which("xwinwrap"):
         # -ov -ni -argb: always-on-top, click-through, transparent.
@@ -288,6 +346,9 @@ def _start_glava():
 def _stop_glava():
     try:
         pid = int(open(GLAVA_PID).read().strip())
+        # Kill glava (the xwinwrap child) first, then the xwinwrap wrapper.
+        subprocess.run(["pkill", "-P", str(pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         os.kill(pid, 15)
     except Exception:
         pass
@@ -297,8 +358,8 @@ def _stop_glava():
         pass
     subprocess.run(["pkill", "-x", "glava"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(["pkill", "-x", "xwinwrap"],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # NOTE: no blanket `pkill -x xwinwrap` here — that would also kill the
+    # video wallpaper's xwinwrap+mpv instance.
 
 
 # ── GLava theme support ────────────────────────────────────────────────────────
@@ -308,6 +369,24 @@ def _read_theme():
         return open(GLAVA_THEME_FILE).read().strip()
     except Exception:
         return "cyan"
+
+def _glava_mode():
+    """Active glava module (wave is the default)."""
+    try:
+        mode = open(GLAVA_MODE_FILE).read().strip()
+        if mode in GLAVA_MODULES:
+            return mode
+    except Exception:
+        pass
+    return "wave"
+
+def _write_glava_mode(mode):
+    try:
+        os.makedirs(os.path.dirname(GLAVA_MODE_FILE), exist_ok=True)
+        with open(GLAVA_MODE_FILE, "w") as f:
+            f.write(mode)
+    except Exception:
+        pass
 
 def _write_theme(theme):
     os.makedirs(os.path.dirname(GLAVA_THEME_FILE), exist_ok=True)
@@ -379,8 +458,12 @@ class BottomBar(QWidget):
         self._ws_rects = []
         self._win_rect = None
         self._hover_win = False
-        self._hover_glava = False
+        self._hover_glava_idx = -1
         self._hover_sw = False
+        self._hover_night = False
+        self._hover_restart = False
+        self._hover_wall = False
+        self._night = _night_level()
         self._glava_on = _glava_running()
         self._accent = _bar_accent()   # color derived from glava.theme
         self.setMouseTracking(True)
@@ -428,12 +511,23 @@ class BottomBar(QWidget):
         if self._color_rect and self._color_rect[0] <= x <= self._color_rect[1]:
             self._cycle_glava_theme()
             return
-        # [GLAVA] button: left-click toggles, right-click cycles theme
-        if self._glava_rect and self._glava_rect[0] <= x <= self._glava_rect[1]:
-            if e.button() == Qt.RightButton:
-                self._cycle_glava_theme()
-            else:
-                self._toggle_glava()
+        # [GLAVA] module buttons: click switches to that module, clicking
+        # the active module toggles glava off
+        for x0, x1, mod in self._glava_rects:
+            if x0 <= x <= x1:
+                self._set_glava_mode(mod)
+                return
+        # [NIGHT] button: cycle redshift reading mode
+        if self._night_rect and self._night_rect[0] <= x <= self._night_rect[1]:
+            self._cycle_night()
+            return
+        # [RESTART] button: relaunch this bar
+        if self._restart_rect and self._restart_rect[0] <= x <= self._restart_rect[1]:
+            self._restart_bar()
+            return
+        # [WALLPAPER] button: cycle to the next video wallpaper
+        if self._wall_rect and self._wall_rect[0] <= x <= self._wall_rect[1]:
+            self._cycle_wallpaper()
             return
 
     def mouseMoveEvent(self, e):
@@ -442,14 +536,16 @@ class BottomBar(QWidget):
         if hov_win != self._hover_win:
             self._hover_win = hov_win
             self.update()
-        # [GLAVA] button hover
-        if self._glava_rect:
-            if self._glava_rect[0] <= x <= self._glava_rect[1]:
-                if not self._hover_glava:
-                    self._hover_glava = True
+        # [GLAVA] module buttons hover
+        for i, (x0, x1, _) in enumerate(self._glava_rects):
+            if x0 <= x <= x1:
+                if self._hover_glava_idx != i:
+                    self._hover_glava_idx = i
                     self.update()
-            elif self._hover_glava:
-                self._hover_glava = False
+                break
+        else:
+            if self._hover_glava_idx != -1:
+                self._hover_glava_idx = -1
                 self.update()
         # [COLOR] button hover
         if self._color_rect:
@@ -460,14 +556,47 @@ class BottomBar(QWidget):
             elif self._hover_sw:
                 self._hover_sw = False
                 self.update()
+        # [NIGHT] button hover
+        if self._night_rect:
+            if self._night_rect[0] <= x <= self._night_rect[1]:
+                if not self._hover_night:
+                    self._hover_night = True
+                    self.update()
+            elif self._hover_night:
+                self._hover_night = False
+                self.update()
+        # [RESTART] button hover
+        if self._restart_rect:
+            if self._restart_rect[0] <= x <= self._restart_rect[1]:
+                if not self._hover_restart:
+                    self._hover_restart = True
+                    self.update()
+            elif self._hover_restart:
+                self._hover_restart = False
+                self.update()
+        # [WALLPAPER] button hover
+        if self._wall_rect:
+            if self._wall_rect[0] <= x <= self._wall_rect[1]:
+                if not self._hover_wall:
+                    self._hover_wall = True
+                    self.update()
+            elif self._hover_wall:
+                self._hover_wall = False
+                self.update()
 
     def leaveEvent(self, e):
         if self._hover_win:
             self._hover_win = False; self.update()
-        if self._hover_glava:
-            self._hover_glava = False; self.update()
+        if self._hover_glava_idx != -1:
+            self._hover_glava_idx = -1; self.update()
         if getattr(self, '_hover_sw', False):
             self._hover_sw = False; self.update()
+        if getattr(self, '_hover_night', False):
+            self._hover_night = False; self.update()
+        if getattr(self, '_hover_restart', False):
+            self._hover_restart = False; self.update()
+        if getattr(self, '_hover_wall', False):
+            self._hover_wall = False; self.update()
         super().leaveEvent(e)
 
     def _toggle_glava(self):
@@ -478,6 +607,28 @@ class BottomBar(QWidget):
             _start_glava()
         self._glava_on = _glava_running()
         self._accent = _bar_accent()
+        self.update()
+
+    def _cycle_glava_mode(self):
+        """Cycle the glava module (wave → graph → bars)."""
+        current = _glava_mode()
+        try:
+            idx = GLAVA_MODULES.index(current)
+        except ValueError:
+            idx = 0
+        mode = GLAVA_MODULES[(idx + 1) % len(GLAVA_MODULES)]
+        self._set_glava_mode(mode)
+
+    def _set_glava_mode(self, mode):
+        """Start glava with `mode`; clicking the active module toggles it off."""
+        if self._glava_on and _glava_mode() == mode:
+            _stop_glava()
+            self._glava_on = False
+        else:
+            _write_glava_mode(mode)
+            _stop_glava()
+            _start_glava()
+            self._glava_on = _glava_running()
         self.update()
 
     def _cycle_glava_theme(self):
@@ -497,6 +648,55 @@ class BottomBar(QWidget):
             self._glava_on = _glava_running()
         self._accent = _bar_accent()
         self.update()
+
+    def _cycle_night(self):
+        """Cycle reading mode: off → 5000K → 5500K → 6000K → reset."""
+        self._night = (self._night + 1) % 4
+        if self._night == 0:
+            subprocess.run(["redshift", "-x"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            temp = NIGHT_TEMPS[self._night - 1]
+            subprocess.run(["redshift", "-O", temp],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _write_night_level(self._night)
+        self.update()
+
+    def _restart_bar(self):
+        """Kill this bar and relaunch it detached (survives this process)."""
+        main = os.path.abspath(sys.argv[0])
+        pid = os.getpid()
+        script = (f"kill -TERM {pid}; sleep 0.3; "
+                  f"setsid python3 {main} >/dev/null 2>&1 < /dev/null &")
+        subprocess.Popen(["bash", "-c", script], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _cycle_wallpaper(self):
+        """Kill the current xwinwrap+mpv wallpaper and start the next video."""
+        vids = _wall_videos()
+        if not vids:
+            return
+        cur = _wall_current()
+        idx = 0
+        if cur and os.path.basename(cur) in vids:
+            idx = (vids.index(os.path.basename(cur)) + 1) % len(vids)
+        nxt = os.path.join(WALL_DIR, vids[idx])
+        # Kill only the wallpaper mpv (pattern never matches this bar);
+        # xwinwrap exits on its own once the child mpv is gone.
+        subprocess.run(["pkill", "-f", "mpv -wid"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        import time; time.sleep(0.2)
+        sw, sh = _screen_size()
+        cmd = ["xwinwrap", "-ni", "-g", f"{sw}x{sh}+0+0", "-ov", "-s", "-st",
+               "-sp", "-b", "-nf", "-un", "--",
+               "mpv", "-wid", "%WID", "--loop=inf", "--no-audio", "--no-osc",
+               "--no-input-default-bindings", "--really-quiet",
+               "--panscan=1.0", nxt]
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except FileNotFoundError:
+            pass
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -532,7 +732,7 @@ class BottomBar(QWidget):
         def cpu_color(v): return RED if v >= 80 else AMBER if v >= 50 else GREEN
         bat_pct = s.get("bat_pct", 100)
         bat_col = RED if bat_pct <= 20 else AMBER if bat_pct <= 40 else GREEN
-        SEP = "  │  "
+        SEP = "│"
         parts = [
             (self._accent,           f"{USER_TAG}  {datetime.now().strftime('%H:%M:%S  %a %d %b')}"),
             (DIM,            SEP),
@@ -565,7 +765,7 @@ class BottomBar(QWidget):
         p.drawText(x + 7, y, win_label)
         x += ww + 6
 
-        # ── [COLOR] + [GLAVA] buttons: sizes first (right edge) ───────
+        # ── [COLOR] + [GLAVA] + [NIGHT] buttons: sizes first (right edge) ──
         # Buttons use a slightly smaller, letter-spaced label font so the
         # controls read distinctly from the stats text.
         bf = QFont("JetBrains Mono", 9, QFont.Bold)
@@ -574,13 +774,28 @@ class BottomBar(QWidget):
         bfm = QFontMetrics(bf)
         by = H - (H - bfm.ascent()) // 2 - 2
 
-        col_w = bfm.horizontalAdvance("COLOR") + 8 + 12 + 7 + 6
-        gla_w = bfm.horizontalAdvance("GLAVA") + 8 + 7 + 7 + 6
+        col_w = bfm.horizontalAdvance("🎨") + 8 + 12 + 7 + 6
+        gla_btns = [(GLAVA_ICONS[m], m) for m in GLAVA_MODULES]
+        gla_row_w = sum(bfm.horizontalAdvance(ic) + 14 for ic, _ in gla_btns) + 4 * (len(gla_btns) - 1)
+        nig_w = bfm.horizontalAdvance("🌙") + 8 + 7 + 7 + 6
+        rst_w = bfm.horizontalAdvance("↻") + 14
+        wal_w = bfm.horizontalAdvance("🎞") + 14
         gap = 8
         color_x = W - 10 - col_w
-        glava_x = color_x - gap - gla_w
+        glava_x = color_x - gap - gla_row_w
+        night_x = glava_x - gap - nig_w
+        restart_x = night_x - gap - rst_w
+        wall_x = restart_x - gap - wal_w
         self._color_rect = (color_x, color_x + col_w)
-        self._glava_rect = (glava_x, glava_x + gla_w)
+        self._glava_rects = []
+        gx = glava_x
+        for ic, mod in gla_btns:
+            bw = bfm.horizontalAdvance(ic) + 14
+            self._glava_rects.append((gx, gx + bw, mod))
+            gx += bw + 4
+        self._night_rect = (night_x, night_x + nig_w)
+        self._restart_rect = (restart_x, restart_x + rst_w)
+        self._wall_rect = (wall_x, wall_x + wal_w)
 
         # ── Right-aligned stats (stopped before the buttons) ──────────
         right = [
@@ -590,7 +805,7 @@ class BottomBar(QWidget):
             (GREEN,        s.get("uptime", "")),
         ]
         right = [(c, t) for c, t in right if t]
-        rx = glava_x - 14
+        rx = wall_x - 14
         for color, text in reversed(right):
             rx -= fm.horizontalAdvance(text)
             p.setPen(color)
@@ -600,18 +815,18 @@ class BottomBar(QWidget):
                 p.setPen(DIM)
                 p.drawText(rx, y, SEP)
 
-        # ── [GLAVA] toggle button ─────────────────────────────────────
+        # ── [GLAVA] module buttons ─────────────────────────────────────
         on = self._glava_on
-        p.setPen(self._accent if on else DIM)
-        p.setBrush(WS_BG.lighter(135) if self._hover_glava else WS_BG)
-        p.drawRoundedRect(glava_x, 3, gla_w, H - 6, 4, 4)
-        dot = 7
-        dotx = glava_x + 8
-        p.setPen(Qt.NoPen)
-        p.setBrush(self._accent if on else QColor(90, 90, 90))
-        p.drawEllipse(dotx, (H - dot) // 2, dot, dot)
-        p.setPen(self._accent if on else WHITE)
-        p.drawText(dotx + dot + 7, by, "GLAVA")
+        cur = _glava_mode()
+        for i, (bx, bx1, mod) in enumerate(self._glava_rects):
+            active = on and mod == cur
+            hover = self._hover_glava_idx == i
+            bw = bx1 - bx
+            p.setPen(self._accent if active else (WHITE if hover else DIM))
+            p.setBrush(WS_BG.lighter(150) if active
+                       else (WS_BG.lighter(135) if hover else WS_BG))
+            p.drawRoundedRect(bx, 3, bw, H - 6, 4, 4)
+            p.drawText(bx + 7, by, GLAVA_ICONS[mod])
 
         # ── [COLOR] cycle button ──────────────────────────────────────
         p.setPen(DIM)
@@ -623,6 +838,31 @@ class BottomBar(QWidget):
         p.setBrush(self._accent)
         p.drawRoundedRect(swx, (H - sw) // 2, sw, sw, 2, 2)
         p.setPen(WHITE)
-        p.drawText(swx + sw + 7, by, "COLOR")
+        p.drawText(swx + sw + 7, by, "🎨")
+
+        # ── [NIGHT] reading-mode button ───────────────────────────────
+        night_col = _NIGHT_COLORS[self._night]
+        p.setPen(night_col if self._night else DIM)
+        p.setBrush(WS_BG.lighter(135) if self._hover_night else WS_BG)
+        p.drawRoundedRect(night_x, 3, nig_w, H - 6, 4, 4)
+        dot = 7
+        dotx = night_x + 8
+        p.setPen(Qt.NoPen)
+        p.setBrush(night_col)
+        p.drawEllipse(dotx, (H - dot) // 2, dot, dot)
+        p.setPen(night_col if self._night else WHITE)
+        p.drawText(dotx + dot + 7, by, "🌙")
+
+        # ── [RESTART] button ──────────────────────────────────────────
+        p.setPen(AMBER)
+        p.setBrush(WS_BG.lighter(135) if self._hover_restart else WS_BG)
+        p.drawRoundedRect(restart_x, 3, rst_w, H - 6, 4, 4)
+        p.drawText(restart_x + 7, by, "↻")
+
+        # ── [WALLPAPER] cycle button ───────────────────────────────────
+        p.setPen(GREEN)
+        p.setBrush(WS_BG.lighter(135) if self._hover_wall else WS_BG)
+        p.drawRoundedRect(wall_x, 3, wal_w, H - 6, 4, 4)
+        p.drawText(wall_x + 7, by, "🎞")
 
         p.end()
