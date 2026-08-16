@@ -4,14 +4,14 @@ Left:  clickable workspace buttons + window switcher
 Mid:   time · CPU · RAM · disk · net speed
 Right: wifi SSID+IP · volume · battery · uptime · [RESTART] · [NIGHT] · [GLAVA] · [COLOR]
 """
-import os, sys, json, getpass, shutil, subprocess
+import os, sys, json, getpass, shutil, subprocess, math
 from datetime import datetime
 
 USER_TAG = f"[{getpass.getuser().upper()}]"
 
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPainter, QColor, QFont, QFontMetrics
+from PySide6.QtGui import QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
 
 CYAN  = QColor(97, 175, 239)
 GREEN = QColor(152, 195, 121)
@@ -27,7 +27,55 @@ GLAVA_THEME_FILE = os.path.expanduser("~/.config/animated-wallpaper/glava.theme"
 GLAVA_MODE_FILE  = os.path.expanduser("~/.config/animated-wallpaper/glava.mode")
 GLAVA_THEMES     = ["cyan", "green", "purple", "red", "rainbow", "sunset"]
 GLAVA_MODULES    = ["wave", "graph", "bars"]
-GLAVA_ICONS      = {"wave": "🌊", "graph": "📈", "bars": "📊"}
+# "wave" renders from the user-owned wavefix module dir: the stock wave
+# shader adds a white term (BASE_COLOR + dist*0.02) that washes out the
+# theme color, so we ship a fixed copy without it.
+_GLAVA_MODULE_DIR = {"wave": "wavefix"}
+
+
+def _draw_module_icon(p, x, ymid, mod, color):
+    """Pen-drawn glava module icon (takes the pen color, unlike emoji)."""
+    if mod == "wave":
+        pen = QPen(color, 1.6)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        path = QPainterPath()
+        n = 9
+        for i in range(n + 1):
+            px = x + i * (12.0 / n)
+            py = ymid + int(3.5 * math.sin(i * math.pi * 2 / n))
+            if i == 0:
+                path.moveTo(px, py)
+            else:
+                path.lineTo(px, py)
+        p.drawPath(path)
+    elif mod == "graph":
+        p.setPen(QPen(color, 1.6))
+        p.setBrush(Qt.NoBrush)
+        pts = [(x, ymid + 5), (x + 4, ymid + 1), (x + 8, ymid - 1), (x + 12, ymid - 5)]
+        for a, b in zip(pts, pts[1:]):
+            p.drawLine(a[0], a[1], b[0], b[1])
+    elif mod == "bars":
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        for i, h in enumerate((3, 6, 9)):
+            p.drawRect(int(x + i * 4.5), ymid + 5 - h, 3, h)
+
+
+def _draw_restart_icon(p, x, ymid, color):
+    """Pen-drawn circular-arrow restart icon (emoji glyphs ignore the pen)."""
+    pen = QPen(color, 1.6)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    cx, cy, r = x + 6.0, ymid, 4.0
+    p.drawArc(int(cx - r), int(cy - r), int(2 * r), int(2 * r), 75 * 16, 270 * 16)
+    a = math.radians(-15)
+    ex = cx + r * math.cos(a)
+    ey = cy - r * math.sin(a)
+    tip = (ex + 2.2, ey - 2.2)
+    p.drawLine(tip[0], tip[1], ex - 1.2, ey - 0.4)
+    p.drawLine(tip[0], tip[1], ex - 0.8, ey + 1.6)
 
 # redshift reading-mode levels: off → 5000K → 5500K → 6000K → reset
 NIGHT_TEMPS  = ["5000K", "5500K", "6000K"]
@@ -324,7 +372,7 @@ def _start_glava():
     _apply_theme_full(_read_theme())
     sw, sh = _screen_size()
     gy = max(0, sh - DOCK_H - GLAVA_H)
-    args = ["glava", "-m", _glava_mode(),
+    args = ["glava", "-m", _GLAVA_MODULE_DIR.get(_glava_mode(), _glava_mode()),
             "-r", f"setgeometry 0 {gy} {sw} {GLAVA_H}"]
     if shutil.which("xwinwrap"):
         # -ov -ni -argb: always-on-top, click-through, transparent.
@@ -740,12 +788,12 @@ class BottomBar(QWidget):
             (cpu_color(cpu), f"{cpu}%"),
             (DIM,            SEP),
             (GREEN,          "🧠 RAM: "),
-            (self._accent,           f"{mem}%"),
+            (cpu_color(mem), f"{mem}%"),
             (DIM,            SEP),
             (GREEN,          "💾 /: "),
-            (self._accent,           f"{disk}%"),
+            (cpu_color(disk), f"{disk}%"),
             (DIM,            SEP),
-            (self._accent,           s.get("net", "?")),
+            (WHITE,          s.get("net", "?")),
             (DIM,            SEP),
         ]
         for color, text in parts:
@@ -775,8 +823,8 @@ class BottomBar(QWidget):
         by = H - (H - bfm.ascent()) // 2 - 2
 
         col_w = bfm.horizontalAdvance("🎨") + 8 + 12 + 7 + 6
-        gla_btns = [(GLAVA_ICONS[m], m) for m in GLAVA_MODULES]
-        gla_row_w = sum(bfm.horizontalAdvance(ic) + 14 for ic, _ in gla_btns) + 4 * (len(gla_btns) - 1)
+        gla_btns = GLAVA_MODULES
+        gla_row_w = sum(28 for _ in gla_btns) + 4 * (len(gla_btns) - 1)
         nig_w = bfm.horizontalAdvance("🌙") + 8 + 7 + 7 + 6
         rst_w = bfm.horizontalAdvance("↻") + 14
         wal_w = bfm.horizontalAdvance("🎞") + 14
@@ -789,8 +837,8 @@ class BottomBar(QWidget):
         self._color_rect = (color_x, color_x + col_w)
         self._glava_rects = []
         gx = glava_x
-        for ic, mod in gla_btns:
-            bw = bfm.horizontalAdvance(ic) + 14
+        for mod in gla_btns:
+            bw = 28
             self._glava_rects.append((gx, gx + bw, mod))
             gx += bw + 4
         self._night_rect = (night_x, night_x + nig_w)
@@ -798,11 +846,13 @@ class BottomBar(QWidget):
         self._wall_rect = (wall_x, wall_x + wal_w)
 
         # ── Right-aligned stats (stopped before the buttons) ──────────
+        vol = s.get("vol", "")
+        vol_pct = int(vol.split("%")[0].split(" ")[-1]) if "%" in vol else 0
         right = [
             (WHITE,        s.get("wifi", "")),
-            (self._accent, s.get("vol", "")),
+            (cpu_color(vol_pct), s.get("vol", "")),
             (bat_col,      s.get("bat", "")),
-            (GREEN,        s.get("uptime", "")),
+            (WHITE,        s.get("uptime", "")),
         ]
         right = [(c, t) for c, t in right if t]
         rx = wall_x - 14
@@ -822,11 +872,15 @@ class BottomBar(QWidget):
             active = on and mod == cur
             hover = self._hover_glava_idx == i
             bw = bx1 - bx
-            p.setPen(self._accent if active else (WHITE if hover else DIM))
+            p.setPen(Qt.NoPen)
             p.setBrush(WS_BG.lighter(150) if active
                        else (WS_BG.lighter(135) if hover else WS_BG))
             p.drawRoundedRect(bx, 3, bw, H - 6, 4, 4)
-            p.drawText(bx + 7, by, GLAVA_ICONS[mod])
+            col = self._accent if active else (WHITE if (hover or on) else DIM)
+            _draw_module_icon(p, bx + 8, H // 2, mod, col)
+            if active:
+                p.setPen(self._accent)
+                p.drawLine(bx + 5, H - 4, bx + bw - 5, H - 4)
 
         # ── [COLOR] cycle button ──────────────────────────────────────
         p.setPen(DIM)
@@ -857,7 +911,7 @@ class BottomBar(QWidget):
         p.setPen(AMBER)
         p.setBrush(WS_BG.lighter(135) if self._hover_restart else WS_BG)
         p.drawRoundedRect(restart_x, 3, rst_w, H - 6, 4, 4)
-        p.drawText(restart_x + 7, by, "↻")
+        _draw_restart_icon(p, restart_x + 7, H // 2, AMBER)
 
         # ── [WALLPAPER] cycle button ───────────────────────────────────
         p.setPen(GREEN)
