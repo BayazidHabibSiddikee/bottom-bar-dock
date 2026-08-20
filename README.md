@@ -78,6 +78,7 @@ All buttons are on the right side of the bar:
 |--------|--------|
 | **workspace 1..N** | switch to that workspace (`i3-msg workspace`) |
 | **▣ window title** | open `rofi -show window` switcher |
+| **📶 wifi name** | open `nm-connection-editor` (NetworkSettings) |
 | **🎨 color swatch** | cycle glava theme (cyan → green → purple → red → rainbow → sunset); restarts glava so shaders recolor live |
 | **〰 / 📈 / ▮ module icons** | start glava with wave / graph / bars module; clicking the active module toggles glava **off** |
 | **🌙 night dot** | cycle reading mode off → 5000K → 5500K → 6000K (`redshift -O`) |
