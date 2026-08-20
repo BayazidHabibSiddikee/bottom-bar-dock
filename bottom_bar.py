@@ -216,7 +216,7 @@ def _network():
                 timeout=1, text=True).splitlines():
             ip = line.split()[3].split("/")[0]; break
     except Exception: pass
-    return f"{icon} {name} {ip}  "
+    return f"{icon} {name} {ip}"
 
 def _battery():
     try:
@@ -531,13 +531,12 @@ class BottomBar(QWidget):
         if self._wall_rect and self._wall_rect[0] <= x <= self._wall_rect[1]:
             self._cycle_wallpaper()
             return
-        # [WIFI] button: open network configuration dialog
+        # [WIFI] button (left of the sound button): open network config dialog
         if self._wifi_rect and self._wifi_rect[0] <= x <= self._wifi_rect[1]:
             subprocess.Popen(["nm-connection-editor"],
                              start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
-
 
     def mouseMoveEvent(self, e):
         x = int(e.position().x())
@@ -589,9 +588,9 @@ class BottomBar(QWidget):
                 if not self._hover_wall:
                     self._hover_wall = True
                     self.update()
-                elif self._hover_wall:
-                    self._hover_wall = False
-                    self.update()
+            elif self._hover_wall:
+                self._hover_wall = False
+                self.update()
         # [WIFI] button hover
         if self._wifi_rect:
             if self._wifi_rect[0] <= x <= self._wifi_rect[1]:
@@ -818,6 +817,10 @@ class BottomBar(QWidget):
         self._wall_rect = (wall_x, wall_x + wal_w)
 
         # ── Right-aligned stats (stopped before the buttons) ──────────
+        # Compute every label's x-bounds in ONE leftward pass (right-to-left),
+        # then draw all labels and the wifi button from that shared geometry.
+        # This guarantees the [WIFI] button fill and its label can never drift
+        # apart.
         right = [
             (WHITE,        s.get("wifi", "")),
             (self._accent, s.get("vol", "")),
@@ -825,42 +828,46 @@ class BottomBar(QWidget):
             (GREEN,        s.get("uptime", "")),
         ]
         right = [(c, t) for c, t in right if t]
+        rpos = []          # (color, text, x_left, x_right) in right-to-left order
         rx = wall_x - 14
-
-        # ── [WIFI] button: wrap the wifi text horizontally ────────────
-        wifi_text = s.get("wifi", "")
-        if wifi_text:
-            # Find exact bounds by re-walking the reversed right list
-            _rx = wall_x - 14
-            _wifi_l = _wifi_r = None
-            for _c, _t in reversed(right):
-                _tw = fm.horizontalAdvance(_t)
-                _l = _rx - _tw
-                if _t.startswith(("📶", "🔌", "📡")):
-                    _wifi_l, _wifi_r = _l, _l + _tw
-                _rx -= fm.horizontalAdvance(SEP)
-            if _wifi_l is not None:
-                # Button extends 10px left of WiFi text, same right edge as text
-                pad_left = 10
-                self._wifi_rect = (_wifi_l - pad_left, _wifi_r)
-                p.setPen(Qt.NoPen)
-                hc = WS_BG.lighter(150) if self._hover_wifi else WS_BG.lighter(130)
-                p.setBrush(hc)
-                p.drawRoundedRect(_wifi_l - pad_left, 3,
-                                 pad_left + (_wifi_r - _wifi_l), H - 6, 4, 4)
-            else:
-                self._wifi_rect = None
-        else:
-            self._wifi_rect = None
-
         for color, text in reversed(right):
-            rx -= fm.horizontalAdvance(text)
-            p.setPen(color)
-            p.drawText(rx, y, text)
-            rx -= fm.horizontalAdvance(SEP)
-            if (color, text) != right[0]:
+            tw = fm.horizontalAdvance(text)
+            l, r = rx - tw, rx
+            rpos.append((color, text, l, r))
+            rx -= tw + fm.horizontalAdvance(SEP)
+        # Shift the wifi control button 3 character-widths left so it reads as
+        # a distinct control set apart from the sound/uptime readout.
+        shift = 3 * fm.horizontalAdvance("M")
+        rpos = [
+            (c, t, tl - shift, tr - shift) if t.startswith(("📶", "🔌", "📡"))
+            else (c, t, tl, tr)
+            for c, t, tl, tr in rpos
+        ]
+        wifi_rpos = next(((i, p) for i, p in enumerate(rpos)
+                          if p[1].startswith(("📶", "🔌", "📡"))), None)
+
+        # ── [WIFI] button (left of the sound/volume): wrap the wifi name ──
+        self._wifi_rect = None
+        if wifi_rpos is not None:
+            _, _, wl, wr = wifi_rpos[1]
+            pad_l, pad_r = 8, 8
+            self._wifi_rect = (wl - pad_l, wr + pad_r)
+            p.setPen(Qt.NoPen)
+            hc = WS_BG.lighter(150) if self._hover_wifi else WS_BG.lighter(130)
+            p.setBrush(hc)
+            p.drawRoundedRect(wl - pad_l, 3,
+                             (wr - wl) + pad_l + pad_r, H - 6, 4, 4)
+
+        # Draw texts and separators, reusing the shared right-to-left bounds.
+        # The rightmost label has no leading separator; the leftmost (wifi) is
+        # now its own button, so it gets none either — separators sit only
+        # between the vol/bat/uptime stats.
+        for idx, (color, text, tl, _tr) in enumerate(rpos):
+            if idx != 0 and idx != len(rpos) - 1:
                 p.setPen(DIM)
-                p.drawText(rx, y, SEP)
+                p.drawText(tl - fm.horizontalAdvance(SEP) - 2, y, SEP)
+            p.setPen(color)
+            p.drawText(tl, y, text)
 
         # ── [GLAVA] module buttons ─────────────────────────────────────
         on = self._glava_on
@@ -871,13 +878,13 @@ class BottomBar(QWidget):
             bw = bx1 - bx
             p.setPen(self._accent if active else (WHITE if hover else DIM))
             p.setBrush(WS_BG.lighter(150) if active
-                           else (WS_BG.lighter(140) if hover else WS_BG.lighter(120)))
+                       else (WS_BG.lighter(135) if hover else WS_BG))
             p.drawRoundedRect(bx, 3, bw, H - 6, 4, 4)
             p.drawText(bx + 7, by, GLAVA_ICONS[mod])
 
         # ── [COLOR] cycle button ──────────────────────────────────────
         p.setPen(DIM)
-        p.setBrush(WS_BG.lighter(135) if self._hover_sw else WS_BG.lighter(120))
+        p.setBrush(WS_BG.lighter(135) if self._hover_sw else WS_BG)
         p.drawRoundedRect(color_x, 3, col_w, H - 6, 4, 4)
         sw = 12
         swx = color_x + 8
