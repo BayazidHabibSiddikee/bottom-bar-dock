@@ -463,6 +463,8 @@ class BottomBar(QWidget):
         self._hover_night = False
         self._hover_restart = False
         self._hover_wall = False
+        self._hover_wifi = False
+        self._wifi_rect = None
         self._night = _night_level()
         self._glava_on = _glava_running()
         self._accent = _bar_accent()   # color derived from glava.theme
