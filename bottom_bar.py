@@ -840,13 +840,14 @@ class BottomBar(QWidget):
                     _wifi_l, _wifi_r = _l, _l + _tw
                 _rx -= fm.horizontalAdvance(SEP)
             if _wifi_l is not None:
-                pad = 6
-                self._wifi_rect = (_wifi_l - pad, _wifi_r + pad)
+                # Button extends 10px left of WiFi text, same right edge as text
+                pad_left = 10
+                self._wifi_rect = (_wifi_l - pad_left, _wifi_r)
                 p.setPen(Qt.NoPen)
                 hc = WS_BG.lighter(150) if self._hover_wifi else WS_BG.lighter(130)
                 p.setBrush(hc)
-                p.drawRoundedRect(_wifi_l - pad, 3,
-                                 (_wifi_r + pad) - (_wifi_l - pad), H - 6, 4, 4)
+                p.drawRoundedRect(_wifi_l - pad_left, 3,
+                                 pad_left + (_wifi_r - _wifi_l), H - 6, 4, 4)
             else:
                 self._wifi_rect = None
         else:
